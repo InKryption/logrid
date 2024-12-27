@@ -260,6 +260,41 @@ pub fn tableRenderCsv(
     }
 }
 
+fn writeCsvString(
+    string: []const u8,
+    writer: anytype,
+) @TypeOf(writer).Error!void {
+    var need_quotes = false;
+    var index: usize = 0;
+    while (true) {
+        const start_index = index;
+        const end_index = std.mem.indexOfAnyPos(u8, string, start_index, &.{ ',', '"' }) orelse {
+            try writer.writeAll(string[start_index..]);
+            break;
+        };
+
+        index = end_index + 1;
+
+        if (!need_quotes) {
+            assert(start_index == 0);
+            try writer.writeByte('"');
+        }
+
+        need_quotes = true;
+
+        try writer.writeAll(string[start_index..index]);
+
+        switch (string[end_index]) {
+            ',' => assert(need_quotes),
+            '"' => try writer.writeByte('"'),
+            else => unreachable,
+        }
+    }
+    if (need_quotes) {
+        try writer.writeByte('"');
+    }
+}
+
 fn testTableWriteCsv(table: Table(.immutable), desc: TableDesc, expected: []const u8) !void {
     try std.testing.expectEqual(.ok, tableValidate(table));
 
@@ -270,6 +305,32 @@ fn testTableWriteCsv(table: Table(.immutable), desc: TableDesc, expected: []cons
 }
 
 test tableRenderCsv {
+    try testTableWriteCsv(
+        try .init(.{ .entries = 5 }, &.{
+            .init(0), .init(4), .init(3),
+            .init(2), .init(1), .init(0),
+            .init(4), .init(3), .init(2),
+            .init(1), .init(0), .init(4),
+            .init(3), .init(2), .init(1),
+        }),
+        .{
+            .entry_kind = "OO",
+            .entries = &.{ "D_", "E_", "F_", "G_", "H_" },
+            .categories = &.{
+                .{ .name = "_A", .properties = &.{ "DA", "GA", "EA", "HA", "FA" } },
+                .{ .name = "_B", .properties = &.{ "GB", "EB", "HB", "FB", "DB" } },
+                .{ .name = "_C", .properties = &.{ "EC", "HC", "FC", "DC", "GC" } },
+            },
+        },
+        \\OO,_A,_B,_C
+        \\D_,DA,DB,DC
+        \\E_,EA,EB,EC
+        \\F_,FA,FB,FC
+        \\G_,GA,GB,GC
+        \\H_,HA,HB,HC
+        ,
+    );
+    // \/
     //    _A _B
     // _C ++ ++
     // _B ++
@@ -298,32 +359,6 @@ test tableRenderCsv {
     // ━━━╋━━━━╋━━━━╋━━━━╋━━━━╋━━━━│
     // DB ┃ OO ┃ -- ┃ -- ┃ -- ┃ -- │
     // ────────────────────────────┘
-
-    try testTableWriteCsv(
-        try .init(.{ .entries = 5 }, &.{
-            .init(0), .init(4), .init(3),
-            .init(2), .init(1), .init(0),
-            .init(4), .init(3), .init(2),
-            .init(1), .init(0), .init(4),
-            .init(3), .init(2), .init(1),
-        }),
-        .{
-            .entry_kind = "OO",
-            .entries = &.{ "D_", "E_", "F_", "G_", "H_" },
-            .categories = &.{
-                .{ .name = "_A", .properties = &.{ "DA", "GA", "EA", "HA", "FA" } },
-                .{ .name = "_B", .properties = &.{ "GB", "EB", "HB", "FB", "DB" } },
-                .{ .name = "_C", .properties = &.{ "EC", "HC", "FC", "DC", "GC" } },
-            },
-        },
-        \\OO,_A,_B,_C
-        \\D_,DA,DB,DC
-        \\E_,EA,EB,EC
-        \\F_,FA,FB,FC
-        \\G_,GA,GB,GC
-        \\H_,HA,HB,HC
-        ,
-    );
 
     for (0.., [_]struct { Table(.immutable), []const u8 }{
         .{
@@ -381,41 +416,6 @@ test tableRenderCsv {
                 .{ .name = "Deaths", .properties = &.{ "30", "20", "10", "00" } },
             },
         }, expected);
-    }
-}
-
-fn writeCsvString(
-    string: []const u8,
-    writer: anytype,
-) @TypeOf(writer).Error!void {
-    var need_quotes = false;
-    var index: usize = 0;
-    while (true) {
-        const start_index = index;
-        const end_index = std.mem.indexOfAnyPos(u8, string, start_index, &.{ ',', '"' }) orelse {
-            try writer.writeAll(string[start_index..]);
-            break;
-        };
-
-        index = end_index + 1;
-
-        if (!need_quotes) {
-            assert(start_index == 0);
-            try writer.writeByte('"');
-        }
-
-        need_quotes = true;
-
-        try writer.writeAll(string[start_index..index]);
-
-        switch (string[end_index]) {
-            ',' => assert(need_quotes),
-            '"' => try writer.writeByte('"'),
-            else => unreachable,
-        }
-    }
-    if (need_quotes) {
-        try writer.writeByte('"');
     }
 }
 
