@@ -1,3 +1,5 @@
+//! This file defines how the logic grid table is represented, validated, and rendered to CSV.
+
 const std = @import("std");
 const assert = std.debug.assert;
 
@@ -149,6 +151,11 @@ pub fn Table(comptime mutability: enum { mutable, immutable }) type {
         pub fn getPropertySlice(table: Self) Slice {
             return table.property_value_buffer[0..table.dim.totalPropertyCount()];
         }
+
+        pub fn getEntryPropertySlice(table: Self, entry: Entry) Slice {
+            assert(@intFromEnum(entry) < table.dim.entries);
+            return table.property_value_buffer[@intFromEnum(entry) * table.dim.categories ..][0..table.dim.categories];
+        }
     };
 }
 
@@ -166,12 +173,11 @@ pub const TableStatus = union(enum) {
 };
 
 pub fn tableValidate(table: Table(.immutable)) TableStatus {
-    const all_properties: []const Property = table.getPropertySlice();
-
     const solved = solved: {
         var solved = true;
 
         var start: usize = 0;
+        const all_properties: []const Property = table.getPropertySlice();
         while (mem.indexOfEqualOrGreaterPos(
             Property,
             all_properties,
@@ -189,10 +195,10 @@ pub fn tableValidate(table: Table(.immutable)) TableStatus {
     };
 
     for (0..table.dim.entries) |entry_val| {
-        const entry_data = all_properties[entry_val * table.dim.categories ..][0..table.dim.categories];
+        const entry_data = table.getEntryPropertySlice(.init(entry_val));
 
         for (entry_val + 1..table.dim.entries) |other_entry_val| {
-            const other_entry_data = all_properties[other_entry_val * table.dim.categories ..][0..table.dim.categories];
+            const other_entry_data = table.getEntryPropertySlice(.init(other_entry_val));
 
             var start: usize = 0;
             while (mem.indexOfEqual(
