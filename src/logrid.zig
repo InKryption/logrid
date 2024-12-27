@@ -12,11 +12,6 @@ pub const Property = enum(Int) {
     pub fn init(value: Int) Property {
         return @enumFromInt(value);
     }
-
-    pub const Location = struct {
-        entry: Entry,
-        category: Category,
-    };
 };
 
 /// A strictly typed alias for an integer, representing a category index.
@@ -41,10 +36,17 @@ pub const Entry = enum(Int) {
     }
 };
 
+pub const Location = struct {
+    entry: Entry,
+    category: Category,
+
+    pub const Int = usize;
+};
+
 pub const Dimensions = struct {
     /// The number of entries.
     entries: Entry.Int,
-    /// The number of categories (values per entry).
+    /// The number of categories (properties per entry).
     categories: Category.Int,
 
     pub const OneStride = union(enum) {
@@ -62,7 +64,7 @@ pub const Dimensions = struct {
     };
     pub fn initStridedProperties(
         one_stride: OneStride,
-        property_count: usize,
+        property_count: Location.Int,
     ) InitStridedPropertiesError!Dimensions {
         return switch (one_stride) {
             inline .entries, .categories => |stride, tag| blk: {
@@ -85,14 +87,14 @@ pub const Dimensions = struct {
         };
     }
 
-    pub fn totalPropertyCount(dim: Dimensions) usize {
+    pub fn totalPropertyCount(dim: Dimensions) Location.Int {
         return dim.entries * dim.categories;
     }
 
     pub fn indexToLocation(
         dim: Dimensions,
-        prop_buf_index: usize,
-    ) Property.Location {
+        prop_buf_index: Location.Int,
+    ) Location {
         assert(prop_buf_index < dim.totalPropertyCount());
         return .{
             .entry = .init(prop_buf_index / dim.categories),
@@ -102,8 +104,8 @@ pub const Dimensions = struct {
 
     pub fn locationToIndex(
         dim: Dimensions,
-        location: Property.Location,
-    ) usize {
+        location: Location,
+    ) Location.Int {
         return @intFromEnum(location.entry) * dim.categories + @intFromEnum(location.category);
     }
 };
@@ -131,7 +133,7 @@ pub fn Table(comptime mutability: enum { mutable, immutable }) type {
             data: Slice,
         ) Dimensions.InitStridedPropertiesError!Self {
             return .{
-                .dim = try .initStridedProperties(one_stride, @intCast(data.len)),
+                .dim = try .initStridedProperties(one_stride, data.len),
                 .property_value_buffer = data.ptr,
             };
         }
@@ -153,7 +155,7 @@ pub fn Table(comptime mutability: enum { mutable, immutable }) type {
 pub const TableStatus = union(enum) {
     ok,
     unsolved,
-    invalid_property: Property.Location,
+    invalid_property: Location,
     duplicate_property: DuplicateProperty,
 
     pub const DuplicateProperty = struct {
@@ -179,7 +181,7 @@ pub fn tableValidate(table: Table(.immutable)) TableStatus {
             if (all_properties[prop_buf_index] == .null) {
                 solved = false;
             } else {
-                return .{ .invalid_property = table.dim.indexToLocation(@intCast(prop_buf_index)) };
+                return .{ .invalid_property = table.dim.indexToLocation(prop_buf_index) };
             }
         }
 
@@ -198,7 +200,7 @@ pub fn tableValidate(table: Table(.immutable)) TableStatus {
                 entry_data[start..],
                 other_entry_data[start..],
             )) |offs| : (start += offs + 1) {
-                const category: Category = .init(@intCast(start + offs));
+                const category: Category = .init(start + offs);
 
                 if (entry_data[@intFromEnum(category)] == .null) {
                     assert(!solved);
@@ -206,8 +208,8 @@ pub fn tableValidate(table: Table(.immutable)) TableStatus {
                 }
 
                 return .{ .duplicate_property = .{
-                    .entry_a = .init(@intCast(entry_val)),
-                    .entry_b = .init(@intCast(other_entry_val)),
+                    .entry_a = .init(entry_val),
+                    .entry_b = .init(other_entry_val),
                     .category = category,
                 } };
             }
@@ -228,6 +230,8 @@ pub const TableDesc = struct {
     };
 };
 
+/// Outputs the full table information in CSV format.
+///
 /// Assumes `tableValidate(table) == .ok`.
 /// ASsumes `desc.entries.len == table.dim.entries`.
 /// ASsumes `desc.categories.len == table.dim.categories`.
@@ -252,8 +256,8 @@ pub fn tableRenderCsv(
             assert(category_desc.properties.len == table.dim.entries);
             try writer.writeByte(',');
             const value_idx = table.dim.locationToIndex(.{
-                .entry = .init(@intCast(entry_val)),
-                .category = .init(@intCast(category_val)),
+                .entry = .init(entry_val),
+                .category = .init(category_val),
             });
             const value = table.getPropertySlice()[value_idx];
             try writeCsvString(category_desc.properties[@intFromEnum(value)], writer);
