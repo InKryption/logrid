@@ -3,10 +3,9 @@ const assert = std.debug.assert;
 
 const mem = @import("mem.zig");
 
-const Int = usize;
-
 /// A strictly typed alias for an integer, representing a property index.
 pub const Property = enum(Int) {
+    pub const Int = usize;
     null = std.math.maxInt(Int),
     _,
 
@@ -22,6 +21,7 @@ pub const Property = enum(Int) {
 
 /// A strictly typed alias for an integer, representing a category index.
 pub const Category = enum(Int) {
+    pub const Int = usize;
     null = std.math.maxInt(Int),
     _,
 
@@ -32,6 +32,7 @@ pub const Category = enum(Int) {
 
 /// A strictly typed alias for an integer, representing an entry index.
 pub const Entry = enum(Int) {
+    pub const Int = usize;
     null = std.math.maxInt(Int),
     _,
 
@@ -42,13 +43,13 @@ pub const Entry = enum(Int) {
 
 pub const Dimensions = struct {
     /// The number of entries.
-    entries: Int,
+    entries: Entry.Int,
     /// The number of categories (values per entry).
-    categories: Int,
+    categories: Category.Int,
 
     pub const OneStride = union(enum) {
-        entries: Int,
-        categories: Int,
+        entries: Entry.Int,
+        categories: Category.Int,
     };
 
     pub const InitStridedPropertiesError = error{
@@ -61,7 +62,7 @@ pub const Dimensions = struct {
     };
     pub fn initStridedProperties(
         one_stride: OneStride,
-        property_count: Int,
+        property_count: usize,
     ) InitStridedPropertiesError!Dimensions {
         return switch (one_stride) {
             inline .entries, .categories => |stride, tag| blk: {
@@ -84,13 +85,13 @@ pub const Dimensions = struct {
         };
     }
 
-    pub fn totalPropertyCount(dim: Dimensions) Int {
+    pub fn totalPropertyCount(dim: Dimensions) usize {
         return dim.entries * dim.categories;
     }
 
     pub fn indexToLocation(
         dim: Dimensions,
-        prop_buf_index: Int,
+        prop_buf_index: usize,
     ) Property.Location {
         assert(prop_buf_index < dim.totalPropertyCount());
         return .{
@@ -102,7 +103,7 @@ pub const Dimensions = struct {
     pub fn locationToIndex(
         dim: Dimensions,
         location: Property.Location,
-    ) Int {
+    ) usize {
         return @intFromEnum(location.entry) * dim.categories + @intFromEnum(location.category);
     }
 };
