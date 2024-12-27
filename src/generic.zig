@@ -104,13 +104,14 @@ pub fn Generic(comptime index_bits: u16) type {
             }
 
             pub fn totalPropertyCount(dim: Dimensions) Int {
-                return @as(Int, dim.entries) * dim.categories;
+                return dim.entries * dim.categories;
             }
 
             pub fn indexToLocation(
                 dim: Dimensions,
                 prop_buf_index: Int,
             ) Property.Location {
+                assert(prop_buf_index < dim.totalPropertyCount());
                 return .{
                     .entry = .init(prop_buf_index / dim.categories),
                     .category = .init(prop_buf_index % dim.categories),
@@ -169,6 +170,7 @@ pub fn Generic(comptime index_bits: u16) type {
 
         pub const TableStatus = union(enum) {
             ok,
+            unsolved,
             invalid_property: Property.Location,
             duplicate_property: DuplicateProperty,
 
@@ -182,26 +184,55 @@ pub fn Generic(comptime index_bits: u16) type {
         pub fn tableValidate(table: Table(.immutable)) TableStatus {
             const all_properties: []const Property = table.getPropertySlice();
 
-            if (mem.indexOfEqualOrGreaterPos(Property, all_properties, 0, .init(table.dim.entries))) |prop_buf_index| {
-                return .{ .invalid_property = table.dim.indexToLocation(@intCast(prop_buf_index)) };
-            }
+            const solved = solved: {
+                var solved = true;
+
+                var start: usize = 0;
+                while (mem.indexOfEqualOrGreaterPos(
+                    Property,
+                    all_properties,
+                    start,
+                    .init(table.dim.entries),
+                )) |prop_buf_index| : (start = prop_buf_index + 1) {
+                    if (all_properties[prop_buf_index] == .null) {
+                        solved = false;
+                    } else {
+                        return .{ .invalid_property = table.dim.indexToLocation(@intCast(prop_buf_index)) };
+                    }
+                }
+
+                break :solved solved;
+            };
 
             for (0..table.dim.entries) |entry_val| {
-                const entry_props = all_properties[entry_val * table.dim.categories ..][0..table.dim.categories];
+                const entry_data = all_properties[entry_val * table.dim.categories ..][0..table.dim.categories];
 
                 for (entry_val + 1..table.dim.entries) |other_entry_val| {
-                    const other_entry_props = all_properties[other_entry_val * table.dim.categories ..][0..table.dim.categories];
-                    if (mem.indexOfEqual(Property, entry_props, other_entry_props)) |category_val| {
+                    const other_entry_data = all_properties[other_entry_val * table.dim.categories ..][0..table.dim.categories];
+
+                    var start: usize = 0;
+                    while (mem.indexOfEqual(
+                        Property,
+                        entry_data[start..],
+                        other_entry_data[start..],
+                    )) |offs| : (start += offs + 1) {
+                        const category: Category = .init(@intCast(start + offs));
+
+                        if (entry_data[@intFromEnum(category)] == .null) {
+                            assert(!solved);
+                            continue;
+                        }
+
                         return .{ .duplicate_property = .{
                             .entry_a = .init(@intCast(entry_val)),
                             .entry_b = .init(@intCast(other_entry_val)),
-                            .category = .init(@intCast(category_val)),
+                            .category = category,
                         } };
                     }
                 }
             }
 
-            return .ok;
+            return if (solved) .ok else .unsolved;
         }
 
         pub const TableDesc = struct {
