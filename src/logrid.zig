@@ -5,7 +5,7 @@ const mem = @import("mem.zig");
 
 const Int = usize;
 
-/// A strictly typed alias for `Int`, representing a property index.
+/// A strictly typed alias for an integer, representing a property index.
 pub const Property = enum(Int) {
     null = std.math.maxInt(Int),
     _,
@@ -20,7 +20,7 @@ pub const Property = enum(Int) {
     };
 };
 
-/// A strictly typed alias for `Int`, representing a category index.
+/// A strictly typed alias for an integer, representing a category index.
 pub const Category = enum(Int) {
     null = std.math.maxInt(Int),
     _,
@@ -30,7 +30,7 @@ pub const Category = enum(Int) {
     }
 };
 
-/// A strictly typed alias for `Int`, representing an entry index.
+/// A strictly typed alias for an integer, representing an entry index.
 pub const Entry = enum(Int) {
     null = std.math.maxInt(Int),
     _,
