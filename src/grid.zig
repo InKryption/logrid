@@ -241,6 +241,33 @@ test validate {
             .init(3), .init(3),
         })),
     );
+
+    try std.testing.expectEqual(
+        ValidationStatus{ .invalid_property = .{
+            .entry = .init(3),
+            .category = .init(1),
+        } },
+        validate(.table(try .initStridedProperties(8, .{ .categories = 2 }), &.{
+            .null,    .init(0),
+            .init(1), .init(1),
+            .init(2), .init(2),
+            .init(3), .init(4),
+        })),
+    );
+
+    try std.testing.expectEqual(
+        ValidationStatus{ .duplicate_property = .{
+            .entry_a = .init(1),
+            .entry_b = .init(2),
+            .category = .init(0),
+        } },
+        validate(.table(try .initStridedProperties(8, .{ .categories = 2 }), &.{
+            .null,    .init(0),
+            .init(1), .init(1),
+            .init(1), .init(2),
+            .init(3), .init(3),
+        })),
+    );
 }
 
 pub const TableDesc = struct {
