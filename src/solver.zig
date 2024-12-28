@@ -6,7 +6,9 @@ const mem = @import("mem.zig");
 const logrid = @import("logrid.zig");
 const grid = logrid.grid;
 
-pub const clue = struct {};
+pub const clue = struct {
+    pub const Equality = struct {};
+};
 
 /// Simple helper for bundling an allocator with an unmanaged data structure in parameters.
 fn Managed(comptime T: type) type {
@@ -32,13 +34,12 @@ pub fn generateMinimumClues(
     },
 ) std.mem.Allocator.Error!void {
     _ = random;
-    _ = clues;
     assert(solve_table.dim.entries == ref_table.dim.entries);
     assert(solve_table.dim.categories == ref_table.dim.categories);
 
     while (true) {
         @memset(solve_table.getPropertySlice(), .null);
-        // for (clues.equality.data.items) |equality| {}
+        for (clues.equality.data.items) |_| {}
     }
 }
 

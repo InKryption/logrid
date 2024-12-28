@@ -57,16 +57,19 @@ pub const Dimensions = struct {
     };
 
     pub const InitStridedPropertiesError = error{
-        /// The specified stride did not evenly divide the property count into the other stride.
-        InexactStride,
         /// There must be more than one entry.
         TooFewEntries,
         /// There must be more than one category.
         TooFewCategories,
+        /// There were fewer properties than could be divided by the stride.
+        TooFewProperties,
+        /// The specified stride did not evenly divide the property count into the other stride.
+        InexactStride,
     };
+
     pub fn initStridedProperties(
-        one_stride: OneStride,
         property_count: Location.Int,
+        one_stride: OneStride,
     ) InitStridedPropertiesError!Dimensions {
         return switch (one_stride) {
             inline .entries, .categories => |stride, tag| blk: {
@@ -74,11 +77,18 @@ pub const Dimensions = struct {
                     .entries => return error.TooFewEntries,
                     .categories => return error.TooFewCategories,
                 };
+                if (stride > property_count) {
+                    return error.TooFewProperties;
+                }
                 if (property_count % stride != 0) {
                     return error.InexactStride;
                 }
 
-                const other_stride: @FieldType(OneStride, @tagName(tag)) = @divExact(property_count, stride);
+                const OtherStride = switch (tag) {
+                    .entries => Category.Int,
+                    .categories => Entry.Int,
+                };
+                const other_stride: OtherStride = @divExact(property_count, stride);
                 break :blk switch (tag) {
                     // zig fmt: off
                     .entries    => .{ .entries = stride,       .categories = other_stride },
@@ -91,6 +101,14 @@ pub const Dimensions = struct {
 
     pub fn totalPropertyCount(dim: Dimensions) Location.Int {
         return dim.entries * dim.categories;
+    }
+
+    /// Returns the index to the first property belonging to the given `entry`.
+    /// The subsequent `dim.categories` properties belong to the `entry`.
+    /// Ie: `property_array[getEntryStart(dim, entry)..][0..dim.categories]` is
+    /// the slice of properties belonging to `entry`.
+    pub fn getEntryStart(dim: Dimensions, entry: Entry) Location.Int {
+        return @intFromEnum(entry) * dim.categories;
     }
 
     pub fn indexToLocation(
@@ -112,54 +130,23 @@ pub const Dimensions = struct {
     }
 };
 
-pub fn Table(comptime mutability: enum { mutable, immutable }) type {
-    return struct {
+pub const Table = struct {
+    dim: Dimensions,
+    data: []const Property,
+
+    pub fn table(
         dim: Dimensions,
-        /// An array of entries with a stride determined by `categories`.
-        property_value_buffer: PropertyValueBuffer,
-        const Self = @This();
-
-        const PropertyValueBuffer = switch (mutability) {
-            .mutable => [*]Property,
-            .immutable => [*]const Property,
+        data: []const Property,
+    ) Table {
+        assert(dim.totalPropertyCount() == data.len);
+        return .{
+            .dim = dim,
+            .data = data,
         };
+    }
+};
 
-        const Slice = switch (mutability) {
-            .mutable => []Property,
-            .immutable => []const Property,
-        };
-
-        /// See `Dimensions.initStridedProperties`.
-        pub fn init(
-            one_stride: Dimensions.OneStride,
-            data: Slice,
-        ) Dimensions.InitStridedPropertiesError!Self {
-            return .{
-                .dim = try .initStridedProperties(one_stride, data.len),
-                .property_value_buffer = data.ptr,
-            };
-        }
-
-        pub fn asConst(table: Self) Table(.immutable) {
-            return .{
-                .entries = table.entries,
-                .categories = table.categories,
-                .property_value_buffer = table.property_value_buffer,
-            };
-        }
-
-        pub fn getPropertySlice(table: Self) Slice {
-            return table.property_value_buffer[0..table.dim.totalPropertyCount()];
-        }
-
-        pub fn getEntryPropertySlice(table: Self, entry: Entry) Slice {
-            assert(@intFromEnum(entry) < table.dim.entries);
-            return table.property_value_buffer[@intFromEnum(entry) * table.dim.categories ..][0..table.dim.categories];
-        }
-    };
-}
-
-pub const TableStatus = union(enum) {
+pub const ValidationStatus = union(enum) {
     ok,
     unsolved,
     invalid_property: Location,
@@ -172,19 +159,18 @@ pub const TableStatus = union(enum) {
     };
 };
 
-pub fn tableValidate(table: Table(.immutable)) TableStatus {
+pub fn validate(table: Table) ValidationStatus {
     const solved = solved: {
         var solved = true;
 
         var start: usize = 0;
-        const all_properties: []const Property = table.getPropertySlice();
         while (mem.indexOfEqualOrGreaterPos(
             Property,
-            all_properties,
+            table.data,
             start,
             .init(table.dim.entries),
         )) |prop_buf_index| : (start = prop_buf_index + 1) {
-            if (all_properties[prop_buf_index] == .null) {
+            if (table.data[prop_buf_index] == .null) {
                 solved = false;
             } else {
                 return .{ .invalid_property = table.dim.indexToLocation(prop_buf_index) };
@@ -194,28 +180,28 @@ pub fn tableValidate(table: Table(.immutable)) TableStatus {
         break :solved solved;
     };
 
-    for (0..table.dim.entries) |entry_val| {
-        const entry_data = table.getEntryPropertySlice(.init(entry_val));
+    for (0..table.dim.entries) |entry_val_a| {
+        const entry_data_a = table.data[table.dim.getEntryStart(.init(entry_val_a))..][0..table.dim.categories];
 
-        for (entry_val + 1..table.dim.entries) |other_entry_val| {
-            const other_entry_data = table.getEntryPropertySlice(.init(other_entry_val));
+        for (entry_val_a + 1..table.dim.entries) |entry_val_b| {
+            const entry_data_b = table.data[table.dim.getEntryStart(.init(entry_val_b))..][0..table.dim.categories];
 
             var start: usize = 0;
             while (mem.indexOfEqual(
                 Property,
-                entry_data[start..],
-                other_entry_data[start..],
+                entry_data_a[start..],
+                entry_data_b[start..],
             )) |offs| : (start += offs + 1) {
                 const category: Category = .init(start + offs);
 
-                if (entry_data[@intFromEnum(category)] == .null) {
+                if (entry_data_a[@intFromEnum(category)] == .null) {
                     assert(!solved);
                     continue;
                 }
 
                 return .{ .duplicate_property = .{
-                    .entry_a = .init(entry_val),
-                    .entry_b = .init(other_entry_val),
+                    .entry_a = .init(entry_val_a),
+                    .entry_b = .init(entry_val_b),
                     .category = category,
                 } };
             }
@@ -223,6 +209,38 @@ pub fn tableValidate(table: Table(.immutable)) TableStatus {
     }
 
     return if (solved) .ok else .unsolved;
+}
+
+test validate {
+    try std.testing.expectEqual(
+        .ok,
+        validate(.table(try .initStridedProperties(8, .{ .categories = 2 }), &.{
+            .init(0), .init(0),
+            .init(1), .init(1),
+            .init(2), .init(2),
+            .init(3), .init(3),
+        })),
+    );
+
+    try std.testing.expectEqual(
+        .unsolved,
+        validate(.table(try .initStridedProperties(8, .{ .categories = 2 }), &.{
+            .null,    .init(0),
+            .init(1), .init(1),
+            .init(2), .init(2),
+            .init(3), .init(3),
+        })),
+    );
+
+    try std.testing.expectEqual(
+        .unsolved,
+        validate(.table(try .initStridedProperties(8, .{ .categories = 2 }), &.{
+            .null,    .init(0),
+            .init(1), .init(1),
+            .init(2), .init(2),
+            .init(3), .init(3),
+        })),
+    );
 }
 
 pub const TableDesc = struct {
@@ -237,13 +255,14 @@ pub const TableDesc = struct {
 };
 
 /// Outputs the full table information in CSV format.
+/// Does not output a trailing newline.
 ///
-/// Assumes `tableValidate(table) == .ok`.
-/// ASsumes `desc.entries.len == table.dim.entries`.
-/// ASsumes `desc.categories.len == table.dim.categories`.
-/// ASsumes `desc.categories[n].properties == table.dim.entries`.
+/// Assumes `tableValidate(data, dim) == .ok`.
+/// ASsumes `desc.entries.len == dim.entries`.
+/// ASsumes `desc.categories.len == dim.categories`.
+/// ASsumes `desc.categories[n].properties == dim.entries`.
 pub fn tableRenderCsv(
-    table: Table(.immutable),
+    table: Table,
     desc: TableDesc,
     /// `std.io.GenericWriter(...)` | `std.io.AnyWriter`
     writer: anytype,
@@ -265,7 +284,7 @@ pub fn tableRenderCsv(
                 .entry = .init(entry_val),
                 .category = .init(category_val),
             });
-            const value = table.getPropertySlice()[value_idx];
+            const value = table.data[value_idx];
             try writeCsvString(category_desc.properties[@intFromEnum(value)], writer);
         }
     }
@@ -306,8 +325,12 @@ fn writeCsvString(
     }
 }
 
-fn testTableWriteCsv(table: Table(.immutable), desc: TableDesc, expected: []const u8) !void {
-    try std.testing.expectEqual(.ok, tableValidate(table));
+fn testTableWriteCsv(
+    table: Table,
+    desc: TableDesc,
+    expected: []const u8,
+) !void {
+    try std.testing.expectEqual(.ok, validate(table));
 
     var actual_string: std.ArrayListUnmanaged(u8) = .empty;
     defer actual_string.deinit(std.testing.allocator);
@@ -317,7 +340,7 @@ fn testTableWriteCsv(table: Table(.immutable), desc: TableDesc, expected: []cons
 
 test tableRenderCsv {
     try testTableWriteCsv(
-        try .init(.{ .entries = 5 }, &.{
+        .table(try .initStridedProperties(15, .{ .categories = 3 }), &.{
             .init(0), .init(4), .init(3),
             .init(2), .init(1), .init(0),
             .init(4), .init(3), .init(2),
@@ -348,73 +371,31 @@ test tableRenderCsv {
     //
     // \/
     //
-    //    ┃ DA ┃ GA ┃ EA ┃ HA ┃ FA │ GB ┃ EB ┃ HB ┃ FB ┃ DB │
-    // ━━━╋━━━━╋━━━━╋━━━━╋━━━━╋━━━━│━━━━╋━━━━╋━━━━╋━━━━╋━━━━│
-    // EC ┃ -- ┃ -- ┃ OO ┃ -- ┃ -- │ -- ┃ OO ┃ -- ┃ -- ┃ -- │
-    // ━━━╋━━━━╋━━━━╋━━━━╋━━━━╋━━━━│━━━━╋━━━━╋━━━━╋━━━━╋━━━━│
-    // HC ┃ -- ┃ -- ┃ -- ┃ OO ┃ -- │ -- ┃ -- ┃ OO ┃ -- ┃ -- │
-    // ━━━╋━━━━╋━━━━╋━━━━╋━━━━╋━━━━│━━━━╋━━━━╋━━━━╋━━━━╋━━━━│
-    // FC ┃ -- ┃ -- ┃ -- ┃ -- ┃ OO │ -- ┃ -- ┃ -- ┃ OO ┃ -- │
-    // ━━━╋━━━━╋━━━━╋━━━━╋━━━━╋━━━━│━━━━╋━━━━╋━━━━╋━━━━╋━━━━│
-    // DC ┃ OO ┃ -- ┃ -- ┃ -- ┃ -- │ -- ┃ -- ┃ -- ┃ -- ┃ OO │
-    // ━━━╋━━━━╋━━━━╋━━━━╋━━━━╋━━━━│━━━━╋━━━━╋━━━━╋━━━━╋━━━━│
-    // GC ┃ -- ┃ OO ┃ -- ┃ -- ┃ -- │ OO ┃ -- ┃ -- ┃ -- ┃ -- │
-    // ────────────────────────────┼────────────────────────┘
-    // GB ┃ -- ┃ OO ┃ -- ┃ -- ┃ -- │
-    // ━━━╋━━━━╋━━━━╋━━━━╋━━━━╋━━━━│
-    // EB ┃ -- ┃ -- ┃ OO ┃ -- ┃ -- │
-    // ━━━╋━━━━╋━━━━╋━━━━╋━━━━╋━━━━│
-    // HB ┃ -- ┃ -- ┃ -- ┃ OO ┃ -- │
-    // ━━━╋━━━━╋━━━━╋━━━━╋━━━━╋━━━━│
-    // FB ┃ -- ┃ -- ┃ -- ┃ -- ┃ OO │
-    // ━━━╋━━━━╋━━━━╋━━━━╋━━━━╋━━━━│
-    // DB ┃ OO ┃ -- ┃ -- ┃ -- ┃ -- │
-    // ────────────────────────────┘
+    //   ┃DA┃GA┃EA┃HA┃FA│GB┃EB┃HB┃FB┃DB│
+    // ━━╋━━╋━━╋━━╋━━╋━━│━━╋━━╋━━╋━━╋━━│
+    // EC┃--┃--┃OO┃--┃--│--┃OO┃--┃--┃--│
+    // ━━╋━━╋━━╋━━╋━━╋━━│━━╋━━╋━━╋━━╋━━│
+    // HC┃--┃--┃--┃OO┃--│--┃--┃OO┃--┃--│
+    // ━━╋━━╋━━╋━━╋━━╋━━│━━╋━━╋━━╋━━╋━━│
+    // FC┃--┃--┃--┃--┃OO│--┃--┃--┃OO┃--│
+    // ━━╋━━╋━━╋━━╋━━╋━━│━━╋━━╋━━╋━━╋━━│
+    // DC┃OO┃--┃--┃--┃--│--┃--┃--┃--┃OO│
+    // ━━╋━━╋━━╋━━╋━━╋━━│━━╋━━╋━━╋━━╋━━│
+    // GC┃--┃OO┃--┃--┃--│OO┃--┃--┃--┃--│
+    // ─────────────────┼──────────────┘
+    // GB┃--┃OO┃--┃--┃--│
+    // ━━╋━━╋━━╋━━╋━━╋━━│
+    // EB┃--┃--┃OO┃--┃--│
+    // ━━╋━━╋━━╋━━╋━━╋━━│
+    // HB┃--┃--┃--┃OO┃--│
+    // ━━╋━━╋━━╋━━╋━━╋━━│
+    // FB┃--┃--┃--┃--┃OO│
+    // ━━╋━━╋━━╋━━╋━━╋━━│
+    // DB┃OO┃--┃--┃--┃--│
+    // ─────────────────┘
 
-    for (0.., [_]struct { Table(.immutable), []const u8 }{
-        .{
-            try .init(.{ .categories = 2 }, &.{
-                .init(0), .init(0),
-                .init(1), .init(1),
-                .init(2), .init(2),
-                .init(3), .init(3),
-            }),
-            \\person,Score,Deaths
-            \\Alex     ,10,30
-            \\Sandy    ,20,20
-            \\Cassandra,30,10
-            \\Freddy   ,40,00
-        },
-        .{
-            try .init(.{ .categories = 2 }, &.{
-                .init(1), .init(0),
-                .init(0), .init(1),
-                .init(2), .init(2),
-                .init(3), .init(3),
-            }),
-            \\person,Score,Deaths
-            \\Alex     ,20,30
-            \\Sandy    ,10,20
-            \\Cassandra,30,10
-            \\Freddy   ,40,00
-        },
-        .{
-            try .init(.{ .categories = 2 }, &.{
-                .init(2), .init(2),
-                .init(0), .init(3),
-                .init(1), .init(1),
-                .init(3), .init(0),
-            }),
-            \\person,Score,Deaths
-            \\Alex     ,30,10
-            \\Sandy    ,10,00
-            \\Cassandra,20,20
-            \\Freddy   ,40,30
-        },
-    }) |i, pair| {
-        errdefer std.log.err("{s}@L{}: Failed on test case {d}", .{ @src().fn_name, @src().line, i });
-        const table, const expected = pair;
-        try testTableWriteCsv(table, .{
+    {
+        const table_desc: TableDesc = .{
             .entry_kind = "person",
             .entries = &.{
                 "Alex     ",
@@ -426,7 +407,87 @@ test tableRenderCsv {
                 .{ .name = "Score", .properties = &.{ "10", "20", "30", "40" } },
                 .{ .name = "Deaths", .properties = &.{ "30", "20", "10", "00" } },
             },
-        }, expected);
+        };
+
+        const s10: Property = .init(0);
+        const s20: Property = .init(1);
+        const s30: Property = .init(2);
+        const s40: Property = .init(3);
+
+        const d30: Property = .init(0);
+        const d20: Property = .init(1);
+        const d10: Property = .init(2);
+        const d00: Property = .init(3);
+
+        const table_dim: Dimensions = try .initStridedProperties(
+            table_desc.entries.len * table_desc.categories.len,
+            .{ .categories = 2 },
+        );
+
+        const test_cases = [_]struct { []const Property, []const u8 }{
+            .{
+                &.{
+                    s10, d30,
+                    s20, d20,
+                    s30, d10,
+                    s40, d00,
+                },
+                \\person,Score,Deaths
+                \\Alex     ,10,30
+                \\Sandy    ,20,20
+                \\Cassandra,30,10
+                \\Freddy   ,40,00
+            },
+            .{
+                &.{
+                    s20, d30,
+                    s10, d20,
+                    s30, d10,
+                    s40, d00,
+                },
+                \\person,Score,Deaths
+                \\Alex     ,20,30
+                \\Sandy    ,10,20
+                \\Cassandra,30,10
+                \\Freddy   ,40,00
+            },
+            .{
+                &.{
+                    s30, d10,
+                    s10, d00,
+                    s20, d20,
+                    s40, d30,
+                },
+                \\person,Score,Deaths
+                \\Alex     ,30,10
+                \\Sandy    ,10,00
+                \\Cassandra,20,20
+                \\Freddy   ,40,30
+            },
+            .{
+                &.{
+                    s40, d00,
+                    s30, d10,
+                    s20, d20,
+                    s10, d30,
+                },
+                \\person,Score,Deaths
+                \\Alex     ,40,00
+                \\Sandy    ,30,10
+                \\Cassandra,20,20
+                \\Freddy   ,10,30
+            },
+        };
+
+        for (test_cases, 0..) |pair, i| {
+            errdefer std.log.err("{s}@L{}: Failed on test case {d}", .{ @src().fn_name, @src().line, i });
+            const table_data, const expected = pair;
+            try testTableWriteCsv(
+                .table(table_dim, table_data),
+                table_desc,
+                expected,
+            );
+        }
     }
 }
 
